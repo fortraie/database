@@ -8,42 +8,45 @@ public class DatabaseNode {
 
     private int tcpPort; // Port tworzonego węzła (dla połączenia z klientami)
     private ServerSocket serverSocket; // Socket tworzonego węzła (dla połączenia z klientami)
-//    private Socket socket; // Socket tworzonego węzła (dla połączenia z innymi węzłami)
 
-    private Map<Integer, Integer> data; // Przechowywane pary klucz-wartość
+    private int key; // Klucz
+    private int value; // Wartość
     private Set<String> connections; // Połączenia z innymi węzłami
+
+    private final String LOCAL_ADDRESS;
+
 
 
     public DatabaseNode(int tcpPort, int key, int value, Set<String> connections) {
         this.tcpPort = tcpPort;
+        this.key = key;
+        this.value = value;
         this.connections = connections;
 
-        data = new HashMap<>();
-        data.put(key, value);
+        try {
+            this.LOCAL_ADDRESS = InetAddress.getLocalHost().getHostAddress() + ":" + tcpPort;
+        } catch (UnknownHostException e) {
+            throw new RuntimeException(e);
+        }
     }
 
 
-    public void addConnection(String connection) {
-        connections.add(connection);
+    public String getLOCAL_ADDRESS() {
+        return LOCAL_ADDRESS;
     }
 
 
-    public int getValue(int key) {
-        return data.getOrDefault(key, -1);
+    public void setConnections(Set<String> connections) {
+        this.connections = connections;
     }
-
-
-    public void newRecord(int key, int value) {
-        data.put(key, value);
-    }
-
 
     public void start() throws IOException {
 
 
         // Utworzenie socketu, obsługującego połączenia klientów
         serverSocket = new ServerSocket(tcpPort);
-        System.out.println("Węzeł " + tcpPort + " rozpoczął nasłuchiwanie.");
+        System.out.printf("[%s] Rozpoczęcie nasłuchiwania z wartością %s:%s.\n", tcpPort, key, value);
+
 
 
         // Utworzenie wątku, obsługującego zapytania od połączonych klientów
@@ -59,37 +62,172 @@ public class DatabaseNode {
                     while ((inputLine = in.readLine()) != null) {
                         String[] parts = inputLine.split(" ");
                         String command = parts[0];
-                        System.out.println("Węzeł " + tcpPort + " otrzymał zapytanie: " + inputLine + " od klienta " + clientSocket.getInetAddress().getCanonicalHostName() + ":" + clientSocket.getLocalPort() + ".");
+                        System.out.printf("[%s <- %s] Otrzymanie zapytania: %s.\n", tcpPort, LOCAL_ADDRESS, inputLine);
 
                         switch (command) {
-                            // Odczyt danych klucz-wartość (według wartości klucza)
-                            case "get-value" -> {
-                                int key = Integer.parseInt(parts[1]);
-                                int value = getValue(key);
+                            // Zastąpienie danych wartości dla zadanego klucza
+                            case "set-value" -> {
+                                String[] subParts = parts[1].split(":");
+                                int inKey = Integer.parseInt(subParts[0]);
+                                boolean isSuccess = false;
 
-                                // Wysłanie zapytania do połączonych węzłów w sytuacji braku danych w lokalnej bazie
-                                if (value == -1) {
+                                if (inKey == key) {
+                                    value = Integer.parseInt(subParts[1]);
+                                    isSuccess = true;
+                                } else {
                                     for (String connection : connections) {
-                                        String response = forward(connection, inputLine);
-                                        if (Integer.parseInt(response) != -1) {
-                                            value = Integer.parseInt(response);
+                                        String response = forward(connection, "get-record");
+                                        String[] responseParts = response.split(":");
+                                        if (Integer.parseInt(responseParts[0]) == inKey) {
+                                            forward(connection, "set-value " + parts[1]);
+                                            isSuccess = true;
                                             break;
                                         }
                                     }
                                 }
-                                System.out.println("Węzeł " + tcpPort + " odczytał wartość " + value + " dla klucza " + key + ".");
-                                out.println(value);
+
+                                if (!isSuccess) {
+                                    System.out.printf("[%s] Zmiana wartości nie powiodła się.\n", tcpPort);
+                                    out.println("ERROR");
+                                } else {
+                                    System.out.printf("[%s] Zmiana wartości na %s.\n", tcpPort, value);
+                                    out.println("OK");
+                                }
+                            }
+                            // Odczyt danych klucz-wartość (według wartości klucza)
+                            case "get-value" -> {
+                                int inKey = Integer.parseInt(parts[1]);
+                                int outValue = -1;
+
+                                if (inKey == key) {
+                                    outValue = value;
+                                } else {
+                                    // Wysłanie zapytania do połączonych węzłów w sytuacji braku danych w lokalnej bazie
+                                    for (String connection : connections) {
+                                        String response = forward(connection, "get-record");
+                                        String[] responseParts = response.split(":");
+                                        if (Integer.parseInt(responseParts[0]) == inKey) {
+                                            outValue = Integer.parseInt(responseParts[1]);
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (outValue == -1) {
+                                    out.println("ERROR");
+                                } else {
+                                    System.out.printf("[%s -> %s] Odczytanie wartości: %s.\n", tcpPort, LOCAL_ADDRESS, outValue);
+                                    out.println(outValue);
+                                }
+
+                            }
+                            // Zwrócenie adresu i numeru portu węzła, na którym przechowywany jest rekord o zadanym kluczu.
+                            case "find-key" -> {
+                                int inKey = Integer.parseInt(parts[1]);
+                                String outNode = "";
+
+                                if (inKey == key) {
+                                    outNode = LOCAL_ADDRESS;
+                                } else {
+                                    // Wysłanie zapytania do połączonych węzłów w sytuacji braku danych w lokalnej bazie
+                                    for (String connection : connections) {
+                                        String response = forward(connection, "get-record");
+                                        String[] responseParts = response.split(":");
+                                        if (Integer.parseInt(responseParts[0]) == inKey) {
+                                            outNode = connection;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (outNode.equals("")) {
+                                    System.out.printf("[%s -> %s] Nie znaleziono klucza: %s.\n", tcpPort, LOCAL_ADDRESS, inKey);
+                                    out.println("ERROR");
+                                } else {
+                                    System.out.printf("[%s -> %s] Odczytanie węzła: %s.\n", tcpPort, LOCAL_ADDRESS, outNode);
+                                    out.println(outNode);
+                                }
+                            }
+                            // Zwrócenie największej wartości ze wszystkich węzłów
+                            case "get-max" -> {
+                                Map<Integer, Integer> values = new HashMap<>();
+                                values.put(key, value);
+
+                                for (String connection : connections) {
+                                    String response = forward(connection, "get-record");
+                                    String[] responseParts = response.split(":");
+                                    values.put(Integer.parseInt(responseParts[0]), Integer.parseInt(responseParts[1]));
+                                }
+
+                                int maxKey = Collections.max(values.keySet());
+                                int maxValue = values.get(maxKey);
+
+                                System.out.printf("[%s -> %s] Odczytanie wartości: %s.\n", tcpPort, LOCAL_ADDRESS, maxValue);
+                                out.println(maxKey + ":" + maxValue);
+                            }
+                            // Zwrócenie najmniejszej wartości ze wszystkich węzłów
+                            case "get-min" -> {
+                                Map<Integer, Integer> values = new HashMap<>();
+                                values.put(key, value);
+
+                                for (String connection : connections) {
+                                    String response = forward(connection, "get-record");
+                                    String[] responseParts = response.split(":");
+                                    values.put(Integer.parseInt(responseParts[0]), Integer.parseInt(responseParts[1]));
+                                }
+
+                                int minKey = Collections.min(values.keySet());
+                                int minValue = values.get(minKey);
+
+                                System.out.printf("[%s -> %s] Odczytanie wartości: %s.\n", tcpPort, LOCAL_ADDRESS, minValue);
+                                out.println(minKey + ":" + minValue);
                             }
                             // Utworzenie nowej pary klucz-wartość
                             case "new-record" -> {
-                                int key = Integer.parseInt(parts[1]);
-                                int value = Integer.parseInt(parts[2]);
-                                newRecord(key, value);
-                                System.out.println("Węzeł " + tcpPort + " utworzył nowy rekord: " + key + " " + value + ".");
+                                String[] subParts = parts[1].split(":");
+                                key = Integer.parseInt(subParts[0]);
+                                value = Integer.parseInt(subParts[1]);
+                                System.out.printf("[%s] Utworzenie nowej pary klucz-wartość: %s, %s.\n", tcpPort, key, value);
                                 out.println("OK");
+                            }
+                            // Zwrócenie wartości klucza i wartości
+                            case "get-record" -> {
+                                System.out.printf("[%s -> %s] Odczytanie wartości: %s:%s.\n", tcpPort, LOCAL_ADDRESS, key, value);
+                                out.println(key + ":" + value);
+                            }
+                            // Wyłączanie węzła
+                            case "terminate" -> {
+                                System.out.printf("[%s] Wyłączenie węzła.\n", tcpPort);
+                                out.println("OK");
+                                for (String connection : connections) {
+                                    System.out.printf("[%s -> %s] Wyłączenie węzła.\n", tcpPort, connection);
+                                    System.out.printf("forward(connection, \"remove-connection \"  + %s);\n", LOCAL_ADDRESS);
+                                    forward(connection, "remove-connection "  + LOCAL_ADDRESS);
+                                }
+                                System.exit(0);
+                            }
+                            // Dodanie nowego połączenia
+                            case "add-connection" -> {
+                                String connection = parts[1];
+                                connections.add(connection);
+                                System.out.printf("[%s] Dodanie połączenia: %s.\n", tcpPort, connection);
+                                out.println("OK");
+                            }
+                            // Usunięcie dotychczasowego połączenia
+                            case "remove-connection" -> {
+                                String connection = parts[1];
+                                connections.remove(connection);
+                                System.out.printf("[%s] Usunięcie połączenia: %s.\n", tcpPort, connection);
+                                out.println("OK");
+                            }
+                            // Zwracanie informacji o hoście
+                            case "get-host" -> {
+                                System.out.printf("[%s -> %s] Odczytanie hosta: %s.\n", tcpPort, LOCAL_ADDRESS, LOCAL_ADDRESS);
+                                out.println(LOCAL_ADDRESS);
                             }
                             // Komunikat o błędzie w zapytaniu
                             default -> {
+                                System.out.printf("[%s -> %s] Błąd w zapytaniu: %s.\n", tcpPort, LOCAL_ADDRESS, inputLine);
                                 out.println("ERROR");
                             }
                         }
@@ -111,7 +249,7 @@ public class DatabaseNode {
         String[] parts = connection.split(":");
         String address = parts[0];
         int port = Integer.parseInt(parts[1]);
-        System.out.println("Węzeł " + tcpPort + " wysyła zapytanie " + inputLine + " do węzła " + address + ":" + port + ".");
+        System.out.printf("[%s -> %s] Przekierowanie zapytania: %s.\n", tcpPort, connection, inputLine);
 
         try {
             Socket connSocket = new Socket(address, port);
@@ -155,14 +293,10 @@ public class DatabaseNode {
                 }
                 case "-connect" -> {
                     connections.add(args[++i]);
-
-                    // Dodanie informacji o połączeniu do węzła, z którym jest nawiązane połączenie
-                    for (String connection : connections) {
-
-                    }
                 }
                 default -> {
-                    System.out.println("Nieznany argument: " + args[i]);
+                    System.out.println("Błąd w argumentach wywołania programu.");
+                    System.exit(1);
                 }
             }
         }
@@ -170,6 +304,21 @@ public class DatabaseNode {
         // Utworzenie nowego węzła
         DatabaseNode node = new DatabaseNode(tcpPort, key, value, connections);
         node.start();
+
+        Set<String> connectionsFixed = new HashSet<>();
+        
+        // Dodanie informacji o połączeniu do węzła, z którym jest nawiązane połączenie
+        for (String connection : connections) {
+            String connectionAddress = node.forward(connection, "get-host");
+            connectionsFixed.add(connectionAddress);
+        }
+
+
+        node.setConnections(connectionsFixed);
+
+        for (String connectionFixed : connectionsFixed) {
+            node.forward(connectionFixed, "add-connection " + node.getLOCAL_ADDRESS());
+        }
 
 
     }
