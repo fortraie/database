@@ -45,7 +45,7 @@ public class DatabaseNode {
 
         // Utworzenie socketu, obsługującego połączenia klientów
         serverSocket = new ServerSocket(tcpPort);
-        System.out.printf("[%s] Rozpoczęcie nasłuchiwania z wartością %s:%s.\n", tcpPort, key, value);
+        System.out.printf("[%s] Rozpoczęcie nasłuchiwania z wartością %s:%s.\n", LOCAL_ADDRESS, key, value);
 
 
 
@@ -57,12 +57,14 @@ public class DatabaseNode {
                     BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                     PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
                     String inputLine;
+                    String clientAddress = "";
 
                     // Warunek wykluczający kontynuację wykonania programu przed otrzymaniem zapytania
                     while ((inputLine = in.readLine()) != null) {
                         String[] parts = inputLine.split(" ");
                         String command = parts[0];
-                        System.out.printf("[%s <- %s] Otrzymanie zapytania: %s.\n", tcpPort, LOCAL_ADDRESS, inputLine);
+                        clientAddress = clientSocket.getInetAddress().getHostAddress() + ":" + clientSocket.getPort();
+                        System.out.printf("[%s <- %s] Otrzymanie zapytania: %s.\n", LOCAL_ADDRESS, clientAddress, inputLine);
 
                         switch (command) {
                             // Zastąpienie danych wartości dla zadanego klucza
@@ -87,10 +89,10 @@ public class DatabaseNode {
                                 }
 
                                 if (!isSuccess) {
-                                    System.out.printf("[%s] Zmiana wartości nie powiodła się.\n", tcpPort);
+                                    System.out.printf("[%s -> %s] Zmiana wartości nie powiodła się.\n", LOCAL_ADDRESS, clientAddress);
                                     out.println("ERROR");
                                 } else {
-                                    System.out.printf("[%s] Zmiana wartości na %s.\n", tcpPort, value);
+                                    System.out.printf("[%s -> %s] Zmiana wartości na %s.\n", LOCAL_ADDRESS, value, clientAddress);
                                     out.println("OK");
                                 }
                             }
@@ -114,11 +116,14 @@ public class DatabaseNode {
                                 }
 
                                 if (outValue == -1) {
+                                    System.out.printf("[%s -> %s] Odczytanie wartości nie powiodło się.\n", LOCAL_ADDRESS, clientAddress);
                                     out.println("ERROR");
                                 } else {
-                                    System.out.printf("[%s -> %s] Odczytanie wartości: %s.\n", tcpPort, LOCAL_ADDRESS, outValue);
+                                    System.out.printf("[%s -> %s] Odczytanie wartości: %s.\n", LOCAL_ADDRESS, clientAddress, outValue);
                                     out.println(outValue);
                                 }
+
+
 
                             }
                             // Zwrócenie adresu i numeru portu węzła, na którym przechowywany jest rekord o zadanym kluczu.
@@ -141,10 +146,10 @@ public class DatabaseNode {
                                 }
 
                                 if (outNode.equals("")) {
-                                    System.out.printf("[%s -> %s] Nie znaleziono klucza: %s.\n", tcpPort, LOCAL_ADDRESS, inKey);
+                                    System.out.printf("[%s -> %s] Nie znaleziono klucza: %s.\n", LOCAL_ADDRESS, clientAddress, inKey);
                                     out.println("ERROR");
                                 } else {
-                                    System.out.printf("[%s -> %s] Odczytanie węzła: %s.\n", tcpPort, LOCAL_ADDRESS, outNode);
+                                    System.out.printf("[%s -> %s] Odczytanie węzła: %s.\n", LOCAL_ADDRESS, clientAddress, outNode);
                                     out.println(outNode);
                                 }
                             }
@@ -162,7 +167,7 @@ public class DatabaseNode {
                                 int maxKey = Collections.max(values.keySet());
                                 int maxValue = values.get(maxKey);
 
-                                System.out.printf("[%s -> %s] Odczytanie wartości: %s.\n", tcpPort, LOCAL_ADDRESS, maxValue);
+                                System.out.printf("[%s -> %s] Odczytanie wartości: %s.\n", LOCAL_ADDRESS, clientAddress, maxValue);
                                 out.println(maxKey + ":" + maxValue);
                             }
                             // Zwrócenie najmniejszej wartości ze wszystkich węzłów
@@ -179,7 +184,7 @@ public class DatabaseNode {
                                 int minKey = Collections.min(values.keySet());
                                 int minValue = values.get(minKey);
 
-                                System.out.printf("[%s -> %s] Odczytanie wartości: %s.\n", tcpPort, LOCAL_ADDRESS, minValue);
+                                System.out.printf("[%s -> %s] Odczytanie wartości: %s.\n", LOCAL_ADDRESS, clientAddress, minValue);
                                 out.println(minKey + ":" + minValue);
                             }
                             // Utworzenie nowej pary klucz-wartość
@@ -187,21 +192,20 @@ public class DatabaseNode {
                                 String[] subParts = parts[1].split(":");
                                 key = Integer.parseInt(subParts[0]);
                                 value = Integer.parseInt(subParts[1]);
-                                System.out.printf("[%s] Utworzenie nowej pary klucz-wartość: %s, %s.\n", tcpPort, key, value);
+                                System.out.printf("[%s] Utworzenie nowej pary klucz-wartość: %s, %s.\n", LOCAL_ADDRESS, key, value);
                                 out.println("OK");
                             }
                             // Zwrócenie wartości klucza i wartości
                             case "get-record" -> {
-                                System.out.printf("[%s -> %s] Odczytanie wartości: %s:%s.\n", tcpPort, LOCAL_ADDRESS, key, value);
+                                System.out.printf("[%s -> %s] Odczytanie wartości: %s:%s.\n", LOCAL_ADDRESS, clientAddress, key, value);
                                 out.println(key + ":" + value);
                             }
                             // Wyłączanie węzła
                             case "terminate" -> {
-                                System.out.printf("[%s] Wyłączenie węzła.\n", tcpPort);
+                                System.out.printf("[%s] Wyłączenie węzła.\n", LOCAL_ADDRESS);
                                 out.println("OK");
                                 for (String connection : connections) {
-                                    System.out.printf("[%s -> %s] Wyłączenie węzła.\n", tcpPort, connection);
-                                    System.out.printf("forward(connection, \"remove-connection \"  + %s);\n", LOCAL_ADDRESS);
+                                    System.out.printf("[%s -> %s] Wyłączenie węzła.\n", LOCAL_ADDRESS, connection);
                                     forward(connection, "remove-connection "  + LOCAL_ADDRESS);
                                 }
                                 System.exit(0);
@@ -210,28 +214,30 @@ public class DatabaseNode {
                             case "add-connection" -> {
                                 String connection = parts[1];
                                 connections.add(connection);
-                                System.out.printf("[%s] Dodanie połączenia: %s.\n", tcpPort, connection);
+                                System.out.printf("[%s] Dodanie połączenia: %s.\n", LOCAL_ADDRESS, connection);
                                 out.println("OK");
                             }
                             // Usunięcie dotychczasowego połączenia
                             case "remove-connection" -> {
                                 String connection = parts[1];
                                 connections.remove(connection);
-                                System.out.printf("[%s] Usunięcie połączenia: %s.\n", tcpPort, connection);
+                                System.out.printf("[%s] Usunięcie połączenia: %s.\n", LOCAL_ADDRESS, connection);
                                 out.println("OK");
                             }
                             // Zwracanie informacji o hoście
                             case "get-host" -> {
-                                System.out.printf("[%s -> %s] Odczytanie hosta: %s.\n", tcpPort, LOCAL_ADDRESS, LOCAL_ADDRESS);
+                                System.out.printf("[%s -> %s] Odczytanie hosta: %s.\n", LOCAL_ADDRESS, clientAddress, LOCAL_ADDRESS);
                                 out.println(LOCAL_ADDRESS);
                             }
                             // Komunikat o błędzie w zapytaniu
                             default -> {
-                                System.out.printf("[%s -> %s] Błąd w zapytaniu: %s.\n", tcpPort, LOCAL_ADDRESS, inputLine);
+                                System.out.printf("[%s -> %s] Błąd w zapytaniu: %s.\n", LOCAL_ADDRESS, clientAddress, inputLine);
                                 out.println("ERROR");
                             }
                         }
+                        break;
                     }
+                    System.out.printf("[%s -> %s] Zakończenie połączenia.\n", LOCAL_ADDRESS, clientAddress);
                     in.close();
                     out.close();
                     clientSocket.close();
@@ -249,7 +255,7 @@ public class DatabaseNode {
         String[] parts = connection.split(":");
         String address = parts[0];
         int port = Integer.parseInt(parts[1]);
-        System.out.printf("[%s -> %s] Przekierowanie zapytania: %s.\n", tcpPort, connection, inputLine);
+        System.out.printf("[%s -> %s] Przekierowanie zapytania: %s.\n", LOCAL_ADDRESS, connection, inputLine);
 
         try {
             Socket connSocket = new Socket(address, port);
