@@ -47,7 +47,7 @@ public class DatabaseClient {
 	PrintWriter out;
 	BufferedReader in;
 	try {
-            System.out.println("Connecting with: " + gateway + " at port " + port);
+        System.out.println("Connecting with: " + gateway + " at port " + port);
 	    netSocket = new Socket(gateway, port);
 	    out = new PrintWriter(netSocket.getOutputStream(), true);
 	    in = new BufferedReader(new InputStreamReader(netSocket.getInputStream()));
